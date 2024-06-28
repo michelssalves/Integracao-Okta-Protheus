@@ -1,0 +1,437 @@
+#INCLUDE "TOTVS.CH"
+
+/*/{Protheus.doc} TOktaIntegration
+    Class to create and disable the user from Okta portal
+    @type class
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+Class TOktaIntegration
+
+	Data cURI        as Character
+	Data oRestClient as Object
+	Data aHeader     as Array
+
+	Public Method New()
+	Public Method CreateUserWithGroup()
+	Public Method UpUserGrp()
+	Public Method CreateGroupOtka()
+	Public Method CreateGrupoByName()
+	Public Method GetIdOktaTotvs()
+	Public Method GetFunctionTotvs()
+	Public Method GetGroupByName()
+	Public Method GetUserId()
+	Public Method SaveIdUsrOkta()
+	Public Method SaveIdGrpOkta()
+	Public Method DeactivateUser()
+	Public Method DelUsrGrpOKTA()
+
+EndClass
+
+/*/{Protheus.doc} TOktaIntegration::New
+    Class Constructor Method
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+Method New() Class TOktaIntegration
+
+	::cURI        := "https://tcp-poc.oktapreview.com/api/v1/" // URI DO SERVIÇO REST
+	::oRestClient := FwRest():New(::cURI) // CLIENTE PARA CONSUMO REST
+	::aHeader     := {}
+	AAdd(::aHeader, "Accept: application/json")
+	AAdd(::aHeader, "Content-Type: application/json")
+	AAdd(::aHeader, "Authorization: SSWS 00b1KF9Lh0C-jyj1BH2855upaiKdkZwO-wOm4JTZSj")
+	AAdd(::aHeader, "Accept-Language: pt-BR")
+
+Return
+
+/*/{Protheus.doc} TOktaIntegration::CreateUserWithGroup()
+    Method to search if the group already exists, if it does not exist, it will create and register the employee by tying it to this group
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+Method CreateUserWithGroup() Class TOktaIntegration
+
+	Local cJson       	as Character
+	Local aNomePartes	as Array
+	Local cSobrenome	as Character
+	Local cNome			as Character
+	Local cGroupId		as Character
+
+	cGroupId 	:= ::CreateGrupoByName(SRA->RA_CODFUNC, SRA->RA_MAT)
+
+	oBody       := JsonObject():New()
+
+	aNomePartes := StrTokArr(SRA->RA_NOME, " ")
+	cNome 		:= aNomePartes[1]
+	cSobrenome 	:= aNomePartes[Len(aNomePartes)]
+
+	oBody["firstName"] 	 := Capital(Lower(AllTrim(cNome)))
+	oBody["lastName"] 	 := Capital(Lower(AllTrim(cSobrenome)))
+	oBody["email"] 		 := Lower(AllTrim(SRA->RA_EMAIL))
+	oBody["login"] 		 := Lower(AllTrim(SRA->RA_EMAIL))
+	oBody["mobilePhone"] := Lower(AllTrim(SRA->RA_TELEFON))
+
+	cJson += '{'
+	cJson += '"profile":' + oBody:ToJson() + ','
+	cJson += '"groupIds":["' + cGroupId + '"]'
+	cJson += '}'
+
+	::oRestClient:SetPostParams(cJson)
+	::oRestClient:SetPath("users?activate=false")
+
+	If ( ::oRestClient:Post(::aHeader) )
+
+		TLogConsole():Log("Processo: [CreateUserWithGroup] - Msg: [" + ::oRestClient:GetResult() + "]", "TOktaIntegration", "1")
+
+		oResponse:FromJson(::oRestClient:GetResult())
+
+		::SaveIdUsrOkta(SRA->RA_MAT, oResponse["id"], cGroupId, RA_CODFUNC)
+	Else
+
+		TLogConsole():Log("Processo: [CreateUserWithGroup] - Msg: [" + ::oRestClient:GetLastError() + "]", "TOktaIntegration", "3")
+
+	EndIf
+
+Return
+
+/*/{Protheus.doc} TOktaIntegration::UpUserGrp()
+	Method Change the user group in OTKA
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+Method UpUserGrp(cEmail as Character, cCodFunc as Character, cMatri as Character) Class TOktaIntegration
+
+	Local oResponse as Object
+	Local aResult  	as Array
+	Local idOkta 	as Character
+	Local idGrpOkta as Character
+
+	aResult 	:= ::GetIdOktaTotvs(cMatri)
+
+	idGrpOkta	:= aResult[1]
+	idOkta		:= aResult[2]
+
+	::DelUsrGrpOKTA(idGrpOkta , idOkta)
+
+	cGroup 		:= ::GetFunctionTotvs(cCodFunc, cMatri)
+	cGroupId 	:= ::GetGroupByName(cGroup)
+
+	If ( Empty(cGroupId) )
+
+		oResponse := ::CreateGroupOtka(cGroup)
+
+		::oRestClient:SetPath('groups/'+oResponse['id']+'/users/'+idOkta)
+		::oRestClient:Put(::aHeader)
+
+		::SaveIdGrpOkta(cMatri, oResponse['id'], RA_CODFUNC)
+
+	Else
+
+		::oRestClient:SetPath('groups/'+cGroupId+'/users/'+RA_XIDOKTA)
+		::oRestClient:Put(::aHeader)
+
+		::SaveIdGrpOkta(cMatri, cGroupId, RA_CODFUNC)
+
+	EndIf
+
+Return
+
+/*/{Protheus.doc} TOktaIntegration::CreateGroupOtka()
+    Method creates a group in OTKA based on the name entered for the function
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+Method CreateGroupOtka(cGroup as Character) Class TOktaIntegration
+
+	Local cJson 		as Character
+	Local cDescription 	as Character
+
+	cDescription := "Group related to the "
+	cDescription += cGroup
+
+	cJson := '{'
+	cJson += '"profile":{"name": "' + cGroup + '","description": "' + cDescription + '"}'
+	cJson += '}'
+
+	::oRestClient:SetPath("groups")
+	::oRestClient:SetPostParams(cJson)
+
+	If ( ::oRestClient:Post(::aHeader) )
+
+		oResponse:FromJson(::oRestClient:GetResult())
+
+	Else
+
+		oResponse:FromJson(::oRestClient:GetResult())
+
+	EndIf
+
+Return oResponse
+
+/*/{Protheus.doc} TOktaIntegration::CreateGrupoByName()
+    Method to create and check if a group exists in the OTKA base
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+Method CreateGrupoByName(cCodFunc as Character, cMatri as Character) Class TOktaIntegration
+
+	Local oResponse as Object
+
+	cGroup 	 := ::GetFunctionTotvs(cCodFunc, cMatri)
+	cGroupId := ::GetGroupByName(cGroup)
+
+	If ( Empty(cGroupId) )
+
+		oResponse := ::CreateGroupOtka(cGroup)
+
+		If ( !Empty(oResponse["id"]) )
+
+			TLogConsole():Log("Processo: [CreateGrupoByName] - Msg: [" + ::oRestClient:GetResult() + "]", "TOktaIntegration", "1")
+			oResponse:FromJson(::oRestClient:GetResult())
+			cGroupId := oResponse["id"]
+
+		Else
+
+			TLogConsole():Log("Processo: [CreateGrupoByName] - Msg: [" + ::oRestClient:GetLastError() + "]", "TOktaIntegration", "3")
+
+		EndIf
+
+	EndIf
+
+Return cGroupId
+
+/*/{Protheus.doc} TOktaIntegration::GetIdOktaTotvs()
+    Method searches the TOTVS database for the User's IdGrupo Otka
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+Method GetIdOktaTotvs(cMatri as Character) Class TOktaIntegration
+
+	Local aResult := {}
+
+	DbSelectArea("SRA")
+	SRA->(DbSetOrder(1)) //RA_FILIAL, RA_MAT, RA_NOME, R_E_C_N_O_, D_E_L_E_T_
+
+	If ( SRA->(MsSeek(FWxFilial("SRA")+cMatri)) )
+
+		AAdd(aResult, AllTrim(SRA->RA_XGROTKA))
+		AAdd(aResult, AllTrim(SRA->RA_XIDOKTA))
+		AAdd(aResult, AllTrim(SRA->RA_XCOFUNC))
+
+	EndIf
+
+Return aResult
+
+/*/{Protheus.doc} TOktaIntegration::GetFunctionTotvs()
+    Method to search for the operating function in the base
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+Method GetFunctionTotvs(cCodFunc as Character, cMatri as Character) Class TOktaIntegration
+
+	DbSelectArea("SRA")
+	SRA->(DbSetOrder(1)) //RA_FILIAL, RA_MAT, RA_NOME, R_E_C_N_O_, D_E_L_E_T_
+	//Seek
+	If ( SRA->(MsSeek(FWxFilial("SRA")+cMatri)) )
+
+		DbSelectArea("SRJ")
+		SRJ->(DbSetOrder(1)) //RJ_FILIAL, RJ_FUNCAO, R_E_C_N_O_, D_E_L_E_T_
+		//Seek
+		If ( SRJ->(MsSeek(FWxFilial("SRJ")+cCodFunc)) )
+
+			cResult := StrTran(Capital(Lower(AllTrim(SRJ->RJ_DESC))), " ", "-")
+
+		EndIf
+	EndIf
+
+Return cResult
+
+/*/{Protheus.doc} TOktaIntegration::GetGroupByName()
+    Method to search if the group already exists in the OTKA base
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+
+Method GetGroupByName(cName as Character) Class TOktaIntegration
+
+	Local oResponse as Object
+	Local cId as Character
+
+	oResponse := {}
+
+	oResponse := JsonObject():New()
+
+	::oRestClient:SetPath('groups?search=profile.name+sw+%22' + cName + '%22')
+
+	If ( ::oRestClient:Get(::aHeader) )
+
+		oResponse:FromJson('{"response":' +::oRestClient:GetResult() + '}')
+
+		If(len(oResponse["response"]) > 0)
+
+			cId := oResponse["response"][1]["id"]
+
+		EndIf
+
+	EndIf
+
+Return cId
+
+/*/{Protheus.doc} TOktaIntegration::GetUserId()
+    Method to search for information based on the email provided
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+
+Method GetUserId(cEmail as Character) Class TOktaIntegration
+
+	Local oResponse  as Object
+	Local cEmail     as Character
+
+	oResponse := JsonObject():New()
+
+	::oRestClient:SetPath("users/" + cEmail)
+
+	If ( ::oRestClient:Get(::aHeader) )
+
+		oResponse:FromJson(::oRestClient:GetResult())
+
+	EndIf
+
+Return oResponse
+
+/*/{Protheus.doc} TOktaIntegration ::SaveIdUsrOkta()
+    Method saves the IdUserOkta in the TOTVS user registration
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+Method SaveIdUsrOkta(cMatri as Character, cidOkta as Character, cidGrpOkt as Character, cFunAtual as Character) Class TOktaIntegration
+
+	DbSelectArea("SRA")
+	SRA->(DbSetOrder(1)) //RA_FILIAL, RA_MAT, RA_NOME, R_E_C_N_O_, D_E_L_E_T_
+	//Seek
+	If ( SRA->(MsSeek(FWxFilial("SRA")+cMatri)) )
+
+		RecLock("SRA",.F.)
+		SRA->RA_XIDOKTA := cidOkta
+		SRA->RA_XGROTKA := cidGrpOkt
+		SRA->RA_XCOFUNC := cFunAtual
+		SRA->(MsUnLock())
+
+	EndIf
+
+Return
+
+/*/{Protheus.doc} TOktaIntegration::SaveIdGrpOkta()
+    Method saves the IdGrupoOkta in the TOTVS user registration
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+Method SaveIdGrpOkta(cMatri as Character, cidGrpOkt as Character, cFunAtual as Character) Class TOktaIntegration
+
+	DbSelectArea("SRA")
+	SRA->(DbSetOrder(1)) //RA_FILIAL, RA_MAT, RA_NOME, R_E_C_N_O_, D_E_L_E_T_
+	//Seek
+	If ( SRA->(MsSeek(FWxFilial("SRA")+cMatri)) )
+
+		RecLock("SRA",.F.)
+		SRA->RA_XGROTKA := cidGrpOkt
+		SRA->RA_XCOFUNC := cFunAtual
+		SRA->(MsUnLock())
+
+	EndIf
+
+Return
+
+/*/{Protheus.doc} TOktaIntegration::DeactivateUser()
+    Method to deactivate an okta user
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+Method DeactivateUser(cEmail as Character, cMatri as Character) Class TOktaIntegration
+
+	Local oResponse  as Object
+	Local lReturn    as Logical
+	Local cIdUser    as Character
+	Local idOkta 	 as Character
+	Local idGrpOkta  as Character
+
+	oResponse := ::GetUserId(cEmail)
+
+	If ( !Empty(oResponse["id"]) )
+
+		cIdUser := oResponse["id"]
+
+		::oRestClient:SetPath("users/" + cIdUser + "/lifecycle/deactivate?sendEmail=true")
+
+		If (::oRestClient:Post(::aHeader))
+
+			lReturn := .T.
+
+			TLogConsole():Log("Processo: [DeactivateUser] - Msg: [" + ::oRestClient:GetResult() + "]", "TOktaIntegration", "1")
+
+			aResult 	:= ::GetIdOktaTotvs(cMatri)
+
+			idGrpOkta	:= aResult[1]
+			idOkta		:= aResult[2]
+
+			::DelUsrGrpOKTA(idGrpOkta , idOkta)
+
+			::SaveIdUsrOkta(cMatri, "", "")
+			
+		Else
+
+			lReturn := .F.
+
+			TLogConsole():Log("Processo: [DeactivateUser] - Msg: [" + ::oRestClient:GetLastError() + "]", "TOktaIntegration", "3")
+
+		EndIf
+
+	EndIf
+
+Return lReturn
+
+/*/{Protheus.doc} TOktaIntegration::DelUsrGrpOKTA() 
+	Method deletes the user from the unregistered group
+    @type method
+    @version 1.0
+    @author Michel Alves
+    @since 19/06/2024
+/*/
+Method DelUsrGrpOKTA(cGrpOkta as Character, cidOkta as Character) Class TOktaIntegration
+
+	::oRestClient:SetPath('groups/'+cGrpOkta+'/users/'+cidOkta)
+
+	::oRestClient:Delete(::aHeader)
+
+Return
+
+
+
+
