@@ -38,12 +38,12 @@ EndClass
 /*/
 Method New() Class TOktaIntegration
 
-	::cURI        := "https://tcp-poc.oktapreview.com/api/v1/" // URI DO SERVIÇO REST
+	::cURI        := "https://tcp-poc.oktapreview.com/api/v1/" // URI DO SERVIÃ‡O REST
 	::oRestClient := FwRest():New(::cURI) // CLIENTE PARA CONSUMO REST
 	::aHeader     := {}
 	AAdd(::aHeader, "Accept: application/json")
 	AAdd(::aHeader, "Content-Type: application/json")
-	AAdd(::aHeader, "Authorization: SSWS 00b1KF9Lh0C-jyj1BH2855upaiKdkZwO-wOm4JTZSj")
+	AAdd(::aHeader, "Authorization: SSWS 00b1KF9Lh0C-jyj1BH2855upaiKdkZwO")
 	AAdd(::aHeader, "Accept-Language: pt-BR")
 
 Return
